@@ -343,6 +343,38 @@ QuitOrKillGently() {
 		((Iteration++))
 	done
 } # QuitOrKillGently
+
+DealWithLaunchDaemon() {
+	# function that stops/starts launchdaemons that could otherwise interfere with install
+	# $1 is name of plist, $2 is stop/start
+
+	[ -f "$1" ] && LaunchDaemonLabel="$(defaults read "$1" Label 2>/dev/null)"
+	if [ "${LaunchDaemonLabel}" = "X" ]; then
+		printlog "$1 not found or not readable. Skipping"
+	else
+		case $2 in
+			stop)
+				# unload LaunchDaemon when running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -eq 0 ]; then
+					launchctl unload -w "$1" && printlog "Unloaded ${LaunchDaemonLabel}" || printlog "Unloading ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} not running, nothing to do"
+				fi
+				;;
+			start)
+				# load LaunchDaemon again if not already running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -ne 0 ]; then
+					launchctl load -w "$1" && printlog "Restarted ${LaunchDaemonLabel}" || printlog "Restarting ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} already running, nothing to do"
+				fi
+				;;
+		esac
+	fi
+} # DealWithLaunchDaemon
+
 checkRunningProcesses() {
     # don't check in DEBUG mode 1
     if [[ $DEBUG -eq 1 ]]; then
@@ -350,32 +382,26 @@ checkRunningProcesses() {
         return
     fi
 
+	# unload LaunchDaemons that could interfere with installation
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" stop
+	done
+
+	# stop/remove user LaunchAgents that could interfere with installation
+	for x in ${LaunchAgentsToStop}; do
+		printlog "stopping $x LaunchAgent"
+		runAsUser launchctl stop "$x"
+		runAsUser launchctl remove "$x"
+	done
+
     # try at most 3 times
     for i in {1..4}; do
-        countedProcesses=0
         for x in ${blockingProcesses}; do
             if pgrep -xq "$x"; then
                 printlog "found blocking process $x"
                 appClosed=1
 
                 case $BLOCKING_PROCESS_ACTION in
-                    quit|quit_kill)
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        if [[ $i > 2 && $BLOCKING_PROCESS_ACTION = "quit_kill" ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                            # give the user a bit of time to quit apps
-                            printlog "waiting 30 seconds for processes to quit"
-                            sleep 30
-                        fi
-                        ;;
-                    kill)
-                      printlog "killing process $x"
-                      pkill $x
-                      sleep 5
-                      ;;
                     prompt_user|prompt_user_then_kill)
                       button=$(displaydialog "Quit “$x” to continue updating? $([[ -n $appNewVersion ]] && echo "Version $appversion is installed, but version $appNewVersion is available.") (Leave this dialogue if you want to activate this update later)." "The application “$x” needs to be updated.")
                       if [[ $button = "Not Now" ]]; then
