@@ -311,6 +311,38 @@ getAppVersion() {
     fi
 }
 
+QuitOrKillGently() {
+	# function that gets called with process name as $1
+	printlog "telling app \"$1\" to quit"
+	runAsUser osascript -e "tell app \"$1\" to quit"
+	sleep 5
+	if pgrep -xq "$1"; then
+		runAsUser osascript -e "tell app \"$1\" to quit"
+		sleep 5
+	fi
+
+	# walk through all processes that can be found using pgrep and first send them a
+	# SIGTERM and after 3 seconds a SIGKILL
+	RemainingPIDs=($(pgrep "$1"))
+	Iteration=0
+	while [ ${#RemainingPIDs[@]} -gt 0 -a ${Iteration} -lt 3 ] ; do
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGTERM to PID ${PID}: ${Process}"
+			kill ${PID}
+		done
+		sleep 5
+		RemainingPIDs=($(pgrep "$1"))
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGKILL to PID ${PID}: ${Process}"
+			kill -9 ${PID}
+		done
+		sleep 3
+		RemainingPIDs=($(pgrep "$1"))
+		((Iteration++))
+	done
+} # QuitOrKillGently
 checkRunningProcesses() {
     # don't check in DEBUG mode 1
     if [[ $DEBUG -eq 1 ]]; then
