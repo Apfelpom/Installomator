@@ -335,8 +335,8 @@ if [[ $(/usr/bin/arch) == "arm64" ]]; then
         rosetta2=no
     fi
 fi
-VERSION="10.5"
-VERSIONDATE="2023-10-15"
+VERSION="10.6beta"
+VERSIONDATE="2023-11-08"
 
 # MARK: Functions
 
@@ -651,6 +651,70 @@ getAppVersion() {
     fi
 }
 
+QuitOrKillGently() {
+	# function that gets called with process name as $1
+	printlog "telling app \"$1\" to quit"
+	runAsUser osascript -e "tell app \"$1\" to quit"
+	sleep 5
+	if pgrep -xq "$1"; then
+		runAsUser osascript -e "tell app \"$1\" to quit"
+		sleep 5
+	fi
+
+	# walk through all processes that can be found using pgrep and first send them a
+	# SIGTERM and after 3 seconds a SIGKILL
+	RemainingPIDs=($(pgrep "$1"))
+	Iteration=0
+	while [ ${#RemainingPIDs[@]} -gt 0 -a ${Iteration} -lt 3 ] ; do
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGTERM to PID ${PID}: ${Process}"
+			kill ${PID}
+		done
+		sleep 5
+		RemainingPIDs=($(pgrep "$1"))
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGKILL to PID ${PID}: ${Process}"
+			kill -9 ${PID}
+		done
+		sleep 3
+		RemainingPIDs=($(pgrep "$1"))
+		((Iteration++))
+	done
+} # QuitOrKillGently
+
+DealWithLaunchDaemon() {
+	# function that stops/starts launchdaemons that could otherwise interfere with install
+	# $1 is name of plist, $2 is stop/start
+
+	[ -f "$1" ] && LaunchDaemonLabel="$(defaults read "$1" Label 2>/dev/null)"
+	if [ "${LaunchDaemonLabel}" = "X" ]; then
+		printlog "$1 not found or not readable. Skipping"
+	else
+		case $2 in
+			stop)
+				# unload LaunchDaemon when running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -eq 0 ]; then
+					launchctl unload -w "$1" && printlog "Unloaded ${LaunchDaemonLabel}" || printlog "Unloading ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} not running, nothing to do"
+				fi
+				;;
+			start)
+				# load LaunchDaemon again if not already running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -ne 0 ]; then
+					launchctl load -w "$1" && printlog "Restarted ${LaunchDaemonLabel}" || printlog "Restarting ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} already running, nothing to do"
+				fi
+				;;
+		esac
+	fi
+} # DealWithLaunchDaemon
+
 checkRunningProcesses() {
     # don't check in DEBUG mode 1
     if [[ $DEBUG -eq 1 ]]; then
@@ -658,32 +722,26 @@ checkRunningProcesses() {
         return
     fi
 
+	# unload LaunchDaemons that could interfere with installation
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" stop
+	done
+
+	# stop/remove user LaunchAgents that could interfere with installation
+	for x in ${LaunchAgentsToStop}; do
+		printlog "stopping $x LaunchAgent"
+		runAsUser launchctl stop "$x"
+		runAsUser launchctl remove "$x"
+	done
+
     # try at most 3 times
     for i in {1..4}; do
-        countedProcesses=0
         for x in ${blockingProcesses}; do
             if pgrep -xq "$x"; then
                 printlog "found blocking process $x"
                 appClosed=1
 
                 case $BLOCKING_PROCESS_ACTION in
-                    quit|quit_kill)
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        if [[ $i > 2 && $BLOCKING_PROCESS_ACTION = "quit_kill" ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                            # give the user a bit of time to quit apps
-                            printlog "waiting 30 seconds for processes to quit"
-                            sleep 30
-                        fi
-                        ;;
-                    kill)
-                      printlog "killing process $x"
-                      pkill $x
-                      sleep 5
-                      ;;
                     prompt_user|prompt_user_then_kill)
                       button=$(displaydialog "Quit “$x” to continue updating? $([[ -n $appNewVersion ]] && echo "Version $appversion is installed, but version $appNewVersion is available.") (Leave this dialogue if you want to activate this update later)." "The application “$x” needs to be updated.")
                       if [[ $button = "Not Now" ]]; then
@@ -693,22 +751,7 @@ checkRunningProcesses() {
                         appClosed=0
                         cleanupAndExit 25 "timed out waiting for user response" ERROR
                       else
-                        if [[ $BLOCKING_PROCESS_ACTION = "prompt_user_then_kill" ]]; then
-                          # try to quit, then set to kill
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                        fi
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     prompt_user_loop)
@@ -722,47 +765,42 @@ checkRunningProcesses() {
                           BLOCKING_PROCESS_ACTION=tell_user
                         fi
                       else
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        # give the user a bit of time to quit apps
-                        printlog "waiting 30 seconds for processes to quit"
-                        sleep 30
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     tell_user|tell_user_then_kill)
                       button=$(displaydialogContinue "Quit “$x” to continue updating? (This is an important update). Wait for notification of update before launching app again." "The application “$x” needs to be updated.")
-                      printlog "telling app $x to quit"
-                      runAsUser osascript -e "tell app \"$x\" to quit"
-                      # give the user a bit of time to quit apps
-                      printlog "waiting 30 seconds for processes to quit"
-                      sleep 30
-                      if [[ $i > 1 && $BLOCKING_PROCESS_ACTION = tell_user_then_kill ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                      fi
+                      printlog "Quit or kill gently $x"
+                      QuitOrKillGently "$x"
+                      ;;
+                    kill|quit|quit_kill)
+                       printlog "Quit or kill gently $x"
+                       QuitOrKillGently "$x"
                       ;;
                     silent_fail)
                       appClosed=0
                       cleanupAndExit 12 "blocking process '$x' found, aborting" ERROR
                       ;;
                 esac
-
-                countedProcesses=$((countedProcesses + 1))
             fi
         done
-
     done
 
-    if [[ $countedProcesses -ne 0 ]]; then
+    if pgrep -xq "$x"; then
         cleanupAndExit 11 "could not quit all processes, aborting..." ERROR
     fi
 
     printlog "no more blocking processes, continue with update" REQ
-}
+} #checkRunningProcesses
 
 reopenClosedProcess() {
     # If Installomator closed any processes, let's get the app opened again
     # credit: Søren Theilgaard (@theilgaard)
+
+	# restart LaunchDaemons that were stopped prior to install
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" start
+	done
 
     # don't reopen if REOPEN is not "yes"
     if [[ $REOPEN != yes ]]; then
@@ -787,7 +825,7 @@ reopenClosedProcess() {
     else
         printlog "Installomator did not close any apps, so no need to reopen any apps." INFO
     fi
-}
+} #reopenClosedProcess
 
 installAppWithPath() { # $1: path to app to install in $targetDir $2: path to folder (with app inside) to copy to $targetDir
     # modified by: Søren Theilgaard (@theilgaard)
@@ -1525,9 +1563,10 @@ valuesfromarguments)
     type="pkg"
     packageID="com.1password.1password"
     downloadURL="https://downloads.1password.com/mac/1Password.pkg"
+    appNewVersion=$(curl -fs https://app-updates.agilebits.com/product_history/OPM8 | grep -Eiom1 '(\d+\.\d+\.\d+) - build' | awk -F" " '/^8\./ {print $1}')
     expectedTeamID="2BUA8C4S2C"
-    blockingProcesses=( "1Password Extension Helper" "1Password 7" "1Password 8" "1Password" "1Password (Safari)" "1PasswordNativeMessageHost" "1PasswordSafariAppExtension" )
-    #forcefulQuit=YES
+	LaunchAgentsToStop=( com.1password.1password-launcher application.com.1password.1password.26721962.26722208 2BUA8C4S2C.com.1password.browser-helper )
+    blockingProcesses=( "1Password" "1Password for Safari" "1Password Helper (GPU)" "1Password Helper" "1Password Browser Helper" "1Password Extension Helper" )
     ;;
 1passwordcli)
     name="1Password CLI"
@@ -4040,6 +4079,8 @@ jamfconnect)
     packageID="com.jamf.connect"
     downloadURL="https://files.jamfconnect.com/JamfConnect.dmg"
     expectedTeamID="483DWKW443"
+    blockingProcesses=( "Jamf Connect" "JamfProCommService" "JamfDaemon")
+    LaunchAgentsToStop=( com.jamf.connect.unlock.login.plist )
     ;;
 jamfconnectconfiguration)
     name="Jamf Connect Configuration"
