@@ -411,22 +411,7 @@ checkRunningProcesses() {
                         appClosed=0
                         cleanupAndExit 25 "timed out waiting for user response" ERROR
                       else
-                        if [[ $BLOCKING_PROCESS_ACTION = "prompt_user_then_kill" ]]; then
-                          # try to quit, then set to kill
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                        fi
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     prompt_user_loop)
@@ -440,47 +425,42 @@ checkRunningProcesses() {
                           BLOCKING_PROCESS_ACTION=tell_user
                         fi
                       else
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        # give the user a bit of time to quit apps
-                        printlog "waiting 30 seconds for processes to quit"
-                        sleep 30
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     tell_user|tell_user_then_kill)
                       button=$(displaydialogContinue "Quit “$x” to continue updating? (This is an important update). Wait for notification of update before launching app again." "The application “$x” needs to be updated.")
-                      printlog "telling app $x to quit"
-                      runAsUser osascript -e "tell app \"$x\" to quit"
-                      # give the user a bit of time to quit apps
-                      printlog "waiting 30 seconds for processes to quit"
-                      sleep 30
-                      if [[ $i > 1 && $BLOCKING_PROCESS_ACTION = tell_user_then_kill ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                      fi
+                      printlog "Quit or kill gently $x"
+                      QuitOrKillGently "$x"
+                      ;;
+                    kill|quit|quit_kill)
+                       printlog "Quit or kill gently $x"
+                       QuitOrKillGently "$x"
                       ;;
                     silent_fail)
                       appClosed=0
                       cleanupAndExit 12 "blocking process '$x' found, aborting" ERROR
                       ;;
                 esac
-
-                countedProcesses=$((countedProcesses + 1))
             fi
         done
-
     done
 
-    if [[ $countedProcesses -ne 0 ]]; then
+    if pgrep -xq "$x"; then
         cleanupAndExit 11 "could not quit all processes, aborting..." ERROR
     fi
 
     printlog "no more blocking processes, continue with update" REQ
-}
+} #checkRunningProcesses
 
 reopenClosedProcess() {
     # If Installomator closed any processes, let's get the app opened again
     # credit: Søren Theilgaard (@theilgaard)
+
+	# restart LaunchDaemons that were stopped prior to install
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" start
+	done
 
     # don't reopen if REOPEN is not "yes"
     if [[ $REOPEN != yes ]]; then
@@ -505,7 +485,7 @@ reopenClosedProcess() {
     else
         printlog "Installomator did not close any apps, so no need to reopen any apps." INFO
     fi
-}
+} #reopenClosedProcess
 
 installAppWithPath() { # $1: path to app to install in $targetDir $2: path to folder (with app inside) to copy to $targetDir
     # modified by: Søren Theilgaard (@theilgaard)
