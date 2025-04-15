@@ -793,7 +793,6 @@ sfsymbols
 shield
 shotcut
 shottr
-shutterencoder
 sidekick
 signal
 signiantapp

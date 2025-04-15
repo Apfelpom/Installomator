@@ -46,7 +46,5 @@ The Installomator team:
 - [Isaac Ordonez - @isaacatmann](https://github.com/isaacatmann)
 - [Søren Theilgaard - @Theile](https://github.com/Theile)
 - [Adam Codega - @acodega](https://github.com/acodega)
-- [Trevor Sysock - @BigMacAdmin](https://github.com/bigmacadmin)
-- [Bart Reardon - @bartreardon](https://github.com/bartreardon)
 
  And with numerous contributions from many others. Thank you all, very much!

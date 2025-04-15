@@ -106,11 +106,7 @@ case $LOGO in
         ;;
     microsoft)
         # Microsoft Endpoint Manager (Intune)
-        if [[ -d "/Library/Intune/Microsoft Intune Agent.app" ]]; then
-            LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
-        elif [[ -d "/Applications/Company Portal.app" ]]; then
-            LOGO="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
-        fi
+        LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
         if [[ -z $MDMProfileName ]]; then; MDMProfileName="Management Profile"; fi
         ;;
     ws1)
@@ -127,6 +123,10 @@ case $LOGO in
         # FileWave
         LOGO="/usr/local/sbin/FileWave.app/Contents/Resources/fwGUI.app/Contents/Resources/kiosk.icns"
         if [[ -z $MDMProfileName ]]; then; MDMProfileName="FileWave MDM Configuration"; fi
+        ;;
+    aaoc)
+        # Arts & Others Communication GmbH
+        LOGO="/Library/Application Support/AAOC/AOAppIcon.icns"
         ;;
 esac
 if [[ ! -a "${LOGO}" ]]; then

@@ -14,7 +14,6 @@ label="" # if no label is sent to the script, this will be used
 #    Søren Theilgaard - @Theile
 #    Adam Codega - @acodega
 #    Trevor Sysock - @BigMacAdmin
-#    Bart Reardon - @bartreardon
 #
 # with contributions from many others
 
@@ -27,7 +26,7 @@ export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 # also no actual installation will be performed
 # debug mode 1 will download to the directory the script is run in, but will not check the version
 # debug mode 2 will download to the temp directory, check for blocking processes, check the version, but will not install anything or remove the current version
-DEBUG=1
+DEBUG=0
 
 # notify behavior
 NOTIFY=success
@@ -36,15 +35,8 @@ NOTIFY=success
 #   - silent       no notifications
 #   - all          all notifications (great for Self Service installation)
 
-# app to show notifications
-NOTIFIER_APP=""
-# options:
-#   - dialog           Swift Dialog (version greater than 2.0 required)
-#   - ibmnotifier      IBM Notifier (version greater than 2.0 required)
-# If not defined, Installomator will look for MDM native notification app (Jamf Pro and AirWatch), and if not found will use Swift Dialog (if found), or IBM Notifier (if found) or else it will use AppleScript (osascript)
-
 # time in seconds to wait for a prompt to be answered before exiting the script
-PROMPT_TIMEOUT=86400
+PROMPT_TIMEOUT=600
 # Common times translated into seconds
 # 60    =  1 minute
 # 300   =  5 minutes
@@ -54,7 +46,7 @@ PROMPT_TIMEOUT=86400
 
 # behavior when blocking processes are found
 # BLOCKING_PROCESS_ACTION is ignored if app label uses updateTool
-BLOCKING_PROCESS_ACTION=tell_user
+BLOCKING_PROCESS_ACTION=prompt_user
 # options:
 #   - ignore       continue even when blocking processes are found
 #   - quit         app will be told to quit nicely if running
@@ -91,7 +83,7 @@ BLOCKING_PROCESS_ACTION=tell_user
 
 
 # logo-icon used in dialog boxes if app is blocking
-LOGO=appstore
+LOGO=aaoc
 # options:
 #   - appstore      Icon is Apple App Store (default)
 #   - jamf          JAMF Pro
@@ -102,6 +94,7 @@ LOGO=appstore
 #   - ws1           Workspace ONE (AirWatch)
 #   - filewave      FileWave
 #   - kandji        Kandji
+#   - aaoc          Arts & Others Communication GmbH
 # path can also be set in the command call, and if file exists, it will be used.
 # Like 'LOGO="/System/Applications/App\ Store.app/Contents/Resources/AppIcon.icns"'
 # (spaces have to be escaped).
@@ -187,6 +180,9 @@ DIALOG_LIST_ITEM_NAME=""
 # When this variable is set, progress for downloads and installs will be sent to this
 # listitem.
 # When the variable is unset, progress will be sent to Swift Dialog's main progress bar.
+
+NOTIFY_DIALOG=0
+# If this variable is set to 1, then we will check for installed Swift Dialog v. 2 or later, and use that for notification
 
 
 # NOTE: How labels work
@@ -337,8 +333,6 @@ MDMProfileName=""
 datadogAPI=""
 # Simply add your own API key for this in order to have logs sent to Datadog
 # See more here: https://www.datadoghq.com/product/log-management/
-DATADOG_LOGFORMAT='${log_priority} : $mdmURL : Installomator-${label} : ${VERSIONDATE//-/} : $SESSION : ${logmessage}'
-DATADOG_REPEAT_LOGFORMAT='${log_priority} : $mdmURL : $APPLICATION : $VERSION : $SESSION : Last Log repeated ${logrepeat} times'
 
 # Log Date format used when parsing logs for debugging, this is the default used by
 # install.log, override this in the case statements if you need something custom per
@@ -354,8 +348,8 @@ if [[ $(/usr/bin/arch) == "arm64" ]]; then
         rosetta2=no
     fi
 fi
-VERSION="11.0beta2"
-VERSIONDATE="2025-03-31"
+VERSION="10.8"
+VERSIONDATE="2025-04-03"
 
 # MARK: Functions
 
@@ -421,36 +415,17 @@ displaydialogContinue() { # $1: message $2: title
 displaynotification() { # $1: message $2: title
     message=${1:-"Message"}
     title=${2:-"Notification"}
+    manageaction="/Library/Application Support/JAMF/bin/Management Action.app/Contents/MacOS/Management Action"
+    hubcli="/usr/local/bin/hubcli"
+    swiftdialog="/usr/local/bin/dialog"
 
-    # For notifications, built in MDM tools have priority over 3. party tools, and AppleScript is the fallback option.
-    # Unless the 3. party tool is specified in variable NOTIFIER_APP
-
-    if [[ "$NOTIFIER_APP" = "dialog" && "$($DIALOG_CMD --version | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "Swift Dialog notification override" INFO
-        printlog "${DIALOG_CMD}: $($DIALOG_CMD --version)" DEBUG
-        "$DIALOG_CMD" --notification --title "$title" --message "$message"
-    elif [[ "$NOTIFIER_APP" = "ibmnotifier" && "$($ibmnotifier --version | cut -d ":" -f2 | grep -oe "[0-9.]*" | head -1 | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "IBM Notifier notification override" INFO
-        printlog "${ibmnotifier}: $($ibmnotifier --version)" DEBUG
-        "$ibmnotifier" -type banner -title "$title" -subtitle "$message" -timeout
+    if [[ "$($swiftdialog --version | cut -d "." -f1)" -ge 2 && "$NOTIFY_DIALOG" -eq 1 ]]; then
+        "$swiftdialog" --notification --title "$title" --message "$message"
     elif [[ -x "$manageaction" ]]; then
-        printlog "Jamf notification" INFO
-        printlog "${manageaction}: $($DIALOG_CMD --version)" DEBUG
          "$manageaction" -message "$message" -title "$title" &
     elif [[ -x "$hubcli" ]]; then
-        printlog "AirWatch Workspace ONE notification" INFO
-        printlog "${hubcli}: $($DIALOG_CMD --version)" DEBUG
          "$hubcli" notify -t "$title" -i "$message" -c "Dismiss"
-    elif [[ "$($DIALOG_CMD --version | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "Swift Dialog notification" INFO
-        printlog "${DIALOG_CMD}: $($DIALOG_CMD --version)" DEBUG
-        "$DIALOG_CMD" --notification --title "$title" --message "$message"
-    elif [[ "$($ibmnotifier --version | cut -d ":" -f2 | grep -oe "[0-9.]*" | head -1 | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "IBM Notifier notification" INFO
-        printlog "${ibmnotifier}: $($ibmnotifier --version)" DEBUG
-        "$ibmnotifier" -type banner -title "$title" -subtitle "$message" -timeout
     else
-        printlog "AppleScript notification fallback" INFO
         runAsUser osascript -e "display notification \"$message\" with title \"$title\""
     fi
 }
@@ -481,8 +456,7 @@ printlog(){
         echo "$timestamp" : "${log_priority}${space_char} : $label : Last Log repeated ${logrepeat} times" | tee -a $log_location
 
         if [[ ! -z $datadogAPI ]]; then
-          datadogLogEntry=$(eval "echo $DATADOG_REPEAT_LOGFORMAT")
-          curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${datadogLogEntry}" > /dev/null
+            curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${log_priority} : $mdmURL : $APPLICATION : $VERSION : $SESSION : Last Log repeated ${logrepeat} times" > /dev/null
         fi
         logrepeat=0
     fi
@@ -491,8 +465,7 @@ printlog(){
     # then post to Datadog's HTTPs endpoint.
     if [[ -n $datadogAPI && ${levels[$log_priority]} -ge ${levels[$datadogLoggingLevel]} ]]; then
         while IFS= read -r logmessage; do
-          datadogLogEntry=$(eval "echo $DATADOG_LOGFORMAT")
-          curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${datadogLogEntry}" > /dev/null
+            curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${log_priority} : $mdmURL : Installomator-${label} : ${VERSIONDATE//-/} : $SESSION : ${logmessage}" > /dev/null
         done <<< "$log_message"
     fi
 
@@ -689,6 +662,70 @@ getAppVersion() {
     fi
 }
 
+QuitOrKillGently() {
+	# function that gets called with process name as $1
+	printlog "telling app \"$1\" to quit"
+	runAsUser osascript -e "tell app \"$1\" to quit"
+	sleep 5
+	if pgrep -xq "$1"; then
+		runAsUser osascript -e "tell app \"$1\" to quit"
+		sleep 5
+	fi
+
+	# walk through all processes that can be found using pgrep and first send them a
+	# SIGTERM and after 3 seconds a SIGKILL
+	RemainingPIDs=($(pgrep "$1"))
+	Iteration=0
+	while [ ${#RemainingPIDs[@]} -gt 0 -a ${Iteration} -lt 3 ] ; do
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGTERM to PID ${PID}: ${Process}"
+			kill ${PID}
+		done
+		sleep 5
+		RemainingPIDs=($(pgrep "$1"))
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGKILL to PID ${PID}: ${Process}"
+			kill -9 ${PID}
+		done
+		sleep 3
+		RemainingPIDs=($(pgrep "$1"))
+		((Iteration++))
+	done
+} # QuitOrKillGently
+
+DealWithLaunchDaemon() {
+	# function that stops/starts launchdaemons that could otherwise interfere with install
+	# $1 is name of plist, $2 is stop/start
+
+	[ -f "$1" ] && LaunchDaemonLabel="$(defaults read "$1" Label 2>/dev/null)"
+	if [ "${LaunchDaemonLabel}" = "X" ]; then
+		printlog "$1 not found or not readable. Skipping"
+	else
+		case $2 in
+			stop)
+				# unload LaunchDaemon when running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -eq 0 ]; then
+					launchctl unload -w "$1" && printlog "Unloaded ${LaunchDaemonLabel}" || printlog "Unloading ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} not running, nothing to do"
+				fi
+				;;
+			start)
+				# load LaunchDaemon again if not already running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -ne 0 ]; then
+					launchctl load -w "$1" && printlog "Restarted ${LaunchDaemonLabel}" || printlog "Restarting ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} already running, nothing to do"
+				fi
+				;;
+		esac
+	fi
+} # DealWithLaunchDaemon
+
 checkRunningProcesses() {
     # don't check in DEBUG mode 1
     if [[ $DEBUG -eq 1 ]]; then
@@ -696,32 +733,26 @@ checkRunningProcesses() {
         return
     fi
 
+	# unload LaunchDaemons that could interfere with installation
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" stop
+	done
+
+	# stop/remove user LaunchAgents that could interfere with installation
+	for x in ${LaunchAgentsToStop}; do
+		printlog "stopping $x LaunchAgent"
+		runAsUser launchctl stop "$x"
+		runAsUser launchctl remove "$x"
+	done
+
     # try at most 3 times
     for i in {1..4}; do
-        countedProcesses=0
         for x in ${blockingProcesses}; do
             if pgrep -xq "$x"; then
                 printlog "found blocking process $x"
                 appClosed=1
 
                 case $BLOCKING_PROCESS_ACTION in
-                    quit|quit_kill)
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        if [[ $i > 2 && $BLOCKING_PROCESS_ACTION = "quit_kill" ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                            # give the user a bit of time to quit apps
-                            printlog "waiting 30 seconds for processes to quit"
-                            sleep 30
-                        fi
-                        ;;
-                    kill)
-                      printlog "killing process $x"
-                      pkill $x
-                      sleep 5
-                      ;;
                     prompt_user|prompt_user_then_kill)
                       button=$(displaydialog "Quit “$x” to continue updating? $([[ -n $appNewVersion ]] && echo "Version $appversion is installed, but version $appNewVersion is available.") (Leave this dialogue if you want to activate this update later)." "The application “$x” needs to be updated.")
                       if [[ $button = "Not Now" ]]; then
@@ -731,22 +762,7 @@ checkRunningProcesses() {
                         appClosed=0
                         cleanupAndExit 25 "timed out waiting for user response" ERROR
                       else
-                        if [[ $BLOCKING_PROCESS_ACTION = "prompt_user_then_kill" ]]; then
-                          # try to quit, then set to kill
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                        fi
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     prompt_user_loop)
@@ -760,47 +776,42 @@ checkRunningProcesses() {
                           BLOCKING_PROCESS_ACTION=tell_user
                         fi
                       else
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        # give the user a bit of time to quit apps
-                        printlog "waiting 30 seconds for processes to quit"
-                        sleep 30
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     tell_user|tell_user_then_kill)
                       button=$(displaydialogContinue "Quit “$x” to continue updating? (This is an important update). Wait for notification of update before launching app again." "The application “$x” needs to be updated.")
-                      printlog "telling app $x to quit"
-                      runAsUser osascript -e "tell app \"$x\" to quit"
-                      # give the user a bit of time to quit apps
-                      printlog "waiting 30 seconds for processes to quit"
-                      sleep 30
-                      if [[ $i > 1 && $BLOCKING_PROCESS_ACTION = tell_user_then_kill ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                      fi
+                      printlog "Quit or kill gently $x"
+                      QuitOrKillGently "$x"
+                      ;;
+                    kill|quit|quit_kill)
+                       printlog "Quit or kill gently $x"
+                       QuitOrKillGently "$x"
                       ;;
                     silent_fail)
                       appClosed=0
                       cleanupAndExit 12 "blocking process '$x' found, aborting" ERROR
                       ;;
                 esac
-
-                countedProcesses=$((countedProcesses + 1))
             fi
         done
-
     done
 
-    if [[ $countedProcesses -ne 0 ]]; then
+    if pgrep -xq "$x"; then
         cleanupAndExit 11 "could not quit all processes, aborting..." ERROR
     fi
 
     printlog "no more blocking processes, continue with update" REQ
-}
+} #checkRunningProcesses
 
 reopenClosedProcess() {
     # If Installomator closed any processes, let's get the app opened again
     # credit: Søren Theilgaard (@theilgaard)
+
+	# restart LaunchDaemons that were stopped prior to install
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" start
+	done
 
     # don't reopen if REOPEN is not "yes"
     if [[ $REOPEN != yes ]]; then
@@ -825,7 +836,7 @@ reopenClosedProcess() {
     else
         printlog "Installomator did not close any apps, so no need to reopen any apps." INFO
     fi
-}
+} #reopenClosedProcess
 
 installAppWithPath() { # $1: path to app to install in $targetDir $2: path to folder (with app inside) to copy to $targetDir
     # modified by: Søren Theilgaard (@theilgaard)
@@ -946,7 +957,7 @@ installAppWithPath() { # $1: path to app to install in $targetDir $2: path to fo
         fi
 
         # set ownership to current user
-        if [[ "$currentUser" != "loginwindow" && "$currentUser" != "_mbsetupuser" && $SYSTEMOWNER -ne 1 ]]; then
+        if [[ "$currentUser" != "loginwindow" && $SYSTEMOWNER -ne 1 ]]; then
             printlog "Changing owner to $currentUser" WARN
             chown -R "$currentUser" "$targetDir/$appName"
         else
@@ -1008,9 +1019,9 @@ installFromPKG() {
     spctlStatus=$(echo $?)
     printlog "spctlOut is $spctlOut" DEBUG
 
-    teamID=$(echo $spctlOut | awk -F '(' '/origin=/ {print $NF }' | tr -d '()' )
-    # Apple signed software has no teamID, grab entire text after origin= instead
-    if [[ -z $teamID ]] || [[ $teamID == "origin="* ]]; then
+    teamID=$(echo $spctlOut | awk -F '(' '/origin=/ {print $2 }' | tr -d '()' )
+    # Apple signed software has no teamID, grab entire origin instead
+    if [[ -z $teamID ]]; then
         teamID=$(echo $spctlOut | awk -F '=' '/origin=/ {print $NF }')
     fi
 
@@ -1558,13 +1569,6 @@ if [[ "$(whoami)" != "root" && "$DEBUG" -eq 0 ]]; then
     cleanupAndExit 6 "not running as root, exiting" ERROR
 fi
 
-# NOTE: 3rd party and MDM Notification binaries
-manageaction="/Library/Application Support/JAMF/bin/Management Action.app/Contents/MacOS/Management Action" # Jamf Pro
-hubcli="/usr/local/bin/hubcli" # AirWatch Workspace ONE
-macmanage="/Library/Addigy/macmanage/MacManage.app/Contents/MacOS/MacManage" # Addigy, currently no notifications
-#swiftdialog="/usr/local/bin/dialog" # dialog
-ibmnotifier="/Applications/IBM Notifier.app/Contents/MacOS/IBM Notifier" #ibmnotifier
-
 # check Swift Dialog presence and version
 DIALOG_CMD="/usr/local/bin/dialog"
 
@@ -1592,18 +1596,19 @@ valuesfromarguments)
     downloadURL="https://app-updates.agilebits.com/download/OPM7"
     appNewVersion=$( curl -fsIL "${downloadURL}" | grep -i "^location" | awk '{print $2}' | sed -E 's/.*\/[0-9a-zA-Z]*-([0-9.]*)\..*/\1/g' )
     expectedTeamID="2BUA8C4S2C"
-    blockingProcesses=( "1Password Extension Helper" "1Password 7" "1Password (Safari)" "1PasswordNativeMessageHost" "1PasswordSafariAppExtension" )
+	LaunchAgentsToStop=( 2BUA8C4S2C.com.agilebits.onepassword7-helper )
+    blockingProcesses=( "Safari" "1Password (Safari)" "1PasswordSafariAppExtension" "Google Chrome" "firefox" "1Password 7" "1Password Extension Helper" )
     #forcefulQuit=YES
     ;;
 1password8)
     name="1Password"
     type="pkg"
-    packageID="com.1password.1password"
+    packageID=''
     downloadURL="https://downloads.1password.com/mac/1Password.pkg"
     appNewVersion=$(curl -s https://releases.1password.com/mac/ | grep "1Password for Mac" | head -n 1 | grep -o ">Updated to.*on<" | grep -oE "[0-9].*[0-9]" | cut -d - -f 1)
     expectedTeamID="2BUA8C4S2C"
-    blockingProcesses=( "1Password Extension Helper" "1Password 7" "1Password 8" "1Password" "1PasswordNativeMessageHost" "1PasswordSafariAppExtension" )
-    #forcefulQuit=YES
+    LaunchAgentsToStop=( com.1password.1password-launcher application.com.1password.1password.26721962.26722208 2BUA8C4S2C.com.1password.browser-helper )
+    blockingProcesses=( "1Password" "1Password Helper (GPU)" "1Password Helper" "1Password Browser Helper" "1Password Extension Helper" )
     ;;
 1passwordcli)
     name="1Password CLI"
@@ -1642,78 +1647,6 @@ valuesfromarguments)
     # As for appNewVersion, it needs to be checked for newer version than 7.2.4
     appNewVersion=$(curl -fs -L https://support.8x8.com/cloud-phone-service/voice/work-desktop/download-8x8-work-for-desktop | grep -m 1 -o "https.*dmg" | sed 's/\"//' | awk '{print $1}' | sed -E 's/.*-v([0-9\.]*)[-\.]*.*/\1/' )
     expectedTeamID="FC967L3QRG"
-    ;;
-ape)
-    name="ApE"
-    type="dmg"
-    downloadURL="https://jorgensen.biology.utah.edu/wayned/ape/Download/Mac/ApE_OSX_modern_current.dmg"
-    appNewVersion="$(curl -fsL "https://jorgensen.biology.utah.edu/wayned/ape/" | grep -Eo 'ApE \(v[0-9]+\.[0-9]+\.[0-9]+' | sed -E 's/ApE \(v//')"
-    expectedTeamID="F5459JB4SG"
-    appName="ApE.app"
-    blockingProcesses=( "ApE" )
-    ;;
-dcp-o-matic|dcpomatic|dcp-o-matic2|dcpomatic2)
-    name="DCP-o-matic 2"
-    type="dmg"
-    appNewVersion=$(curl -fs https://dcpomatic.com/download | grep "Stable release: " | awk -F '</p>' '{print $1}' | grep -o -e "[0-9.]*")
-    downloadURL="https://dcpomatic.com/dl.php?id=osx-10.10-main&version=$appNewVersion&paid=0"
-	versionKey="CFBundleVersion"
-    expectedTeamID="R82DXSR997"
-    ;;
-hudlsportscode)
-    name="Hudl Sportscode"
-    type="appInDmgInZip"
-    appNewVersion=$(curl -fs https://www.hudl.com/downloads/elite | grep -A 1 "Download Hudl Sportscode" | grep -o -e "[0-9.]*")
-    downloadURL="https://sportscode64-updates.s3.amazonaws.com/PublicReleaseDmgs/HudlSportscode-$appNewVersion.dmg.zip"
-	versionKey="CFBundleVersion"
-    expectedTeamID="4M6T2C723P"
-    ;;
-hudlstudio)
-    name="Studio"
-    type="dmg"
-    appNewVersion=$(curl -fs https://www.hudl.com/downloads/elite | grep -A 1 "Download Studio" | grep -o -e "[0-9.]*")
-    downloadURL="https://studio-releases.s3.amazonaws.com/Studio-$appNewVersion.dmg"
-	versionKey="CFBundleVersion"
-    expectedTeamID="2YLQ7PASUE"
-    ;;
-synergybaseball)
-    name="Synergy Baseball"
-    type="dmg"
-    downloadURL="$( echo https://www.synergysportstech.com/baseballclient/MacOS/$(curl -s https://www.synergysportstech.com/baseballclient/MacOS/default.htm | grep dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}') )"
-    appNewVersion=$(curl -fs https://www.synergysportstech.com/baseballclient/MacOS/default.htm | grep Version: | grep -o -e "[0-9.]*")
-	versionKey="CFBundleVersion"
-    expectedTeamID="BATB6XS52B"
-    ;;
-
-synergybasketball)
-    name="Synergy Basketball"
-    type="dmg"
-    downloadURL="$( echo https://www.synergysportstech.com/Apps/Basketball/production/macOS/$(curl -s https://www.synergysportstech.com/Apps/Basketball/production/macOS/default.htm | grep dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}') )"
-    appNewVersion=$(curl -fs https://www.synergysportstech.com/Apps/Basketball/production/macOS/default.htm | grep Version: | grep -o -e "[0-9.]*")
-	versionKey="CFBundleVersion"
-    expectedTeamID="BATB6XS52B"
-    ;;
-synergyeditor|synergyeditorbasketball)
-    name="Synergy Editor"
-    type="dmg"
-    if [[ "$(arch)" == "arm64" ]]; then
-        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep arm64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
-    else
-        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep x64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
-    fi
-    appNewVersion=$(curl -fs https://www.synergysportstech.com/apps/editor/basketball/macos/default.html | grep Version: | grep -o -e "[0-9.]*")
-    versionKey="CFBundleShortVersionString"
-    expectedTeamID="BATB6XS52B"
-    ;;
-synergyvideoexpress)
-    name="Synergy Video Express"
-    type="dmg"
-    relativeDownloadURL="$(curl -fsL https://www.synergysportstech.com/apps/videoexpress/production/macOS/default.htm | grep -Eo 'Synergy_Video_Express_[^"]+\.dmg' | head -1)"
-    downloadURL="https://www.synergysportstech.com/apps/videoexpress/production/macOS/${relativeDownloadURL}"
-    appNewVersion=$(echo "$relativeDownloadURL" | sed -E 's/.*_([0-9]+_[0-9]+_[0-9]+_[0-9]+)\.dmg/\1/' | tr '_' '.')
-    expectedTeamID="BATB6XS52B"
-    appName="Synergy Video Express.app"
-    blockingProcesses=( "Synergy Video Express" )
     ;;
 abetterfinderrename11)
     name="A Better Finder Rename 11"
@@ -2251,6 +2184,15 @@ apachenetbeans)
     appNewVersion=$( curl -fs "https://netbeans.apache.org/front/main/download/index.html" | grep -o 'Apache NetBeans [0-9]\+' | sed 's/Apache NetBeans //' | head -n 1 )
     downloadURL="https://dlcdn.apache.org/netbeans/netbeans-installers/"${appNewVersion}"/Apache-NetBeans-"${appNewVersion}".pkg"
     expectedTeamID="2GLGAFWEQD"
+    ;;
+ape)
+    name="ApE"
+    type="dmg"
+    downloadURL="https://jorgensen.biology.utah.edu/wayned/ape/Download/Mac/ApE_OSX_modern_current.dmg"
+    appNewVersion="$(curl -fsL "https://jorgensen.biology.utah.edu/wayned/ape/" | grep -Eo 'ApE \(v[0-9]+\.[0-9]+\.[0-9]+' | sed -E 's/ApE \(v//')"
+    expectedTeamID="F5459JB4SG"
+    appName="ApE.app"
+    blockingProcesses=( "ApE" )
     ;;
 apparency)
     name="Apparency"
@@ -3493,11 +3435,11 @@ cloudflarewarp)
 cloudya)
     name="Cloudya"
     type="appInDmgInZip"
-    downloadURL="$(curl -fs https://www.nfon.com/de/service/downloads | grep -i -E -o "https://cdn.cloudya.com/Cloudya-[.0-9]+-mac.zip")"
-    appNewVersion="$(curl -fs https://www.nfon.com/de/service/downloads | grep -i -E -o "Cloudya Desktop App MAC [0-9.]*" | sed 's/^.*\ \([^ ]\{0,7\}\)$/\1/g')"
+    # Versuch, die neueste Version von der Webseite zu extrahieren
+    appNewVersion=$(curl -s "https://www.nfon.com/de/service/downloads/" | grep -o "cloudya-[0-9]\.[0-9]\.[0-9]-mac.zip" | head -n1 | cut -d'-' -f2)
+    downloadURL="https://cdn.cloudya.com/cloudya-${appNewVersion}-mac.zip"
     expectedTeamID="X26F74J8TH"
-    ;;
-clue)
+    ;;clue)
     #For personal use and students
     name="Clue"
     type="dmg"
@@ -3732,6 +3674,14 @@ dbeaverce)
     fi
     expectedTeamID="42B6MDKMW8"
     blockingProcesses=( dbeaver )
+    ;;
+dcp-o-matic|dcpomatic|dcp-o-matic2|dcpomatic2)
+    name="DCP-o-matic 2"
+    type="dmg"
+    appNewVersion=$(curl -fs https://dcpomatic.com/download | grep "Stable release: " | awk -F '</p>' '{print $1}' | grep -o -e "[0-9.]*")
+    downloadURL="https://dcpomatic.com/dl.php?id=osx-10.10-main&version=$appNewVersion&paid=0"
+	versionKey="CFBundleVersion"
+    expectedTeamID="R82DXSR997"
     ;;
 debookee)
     name="Debookee"
@@ -4340,8 +4290,8 @@ favro)
 fellow)
     name="Fellow"
     type="dmg"
-    downloadURL="https://fellow.app/desktop/download/darwin/latest/"
-    appNewVersion="$(curl -fsIL "${downloadURL}" | grep -i ^location | sed 's/^.*[^0-9]\([0-9]*\.[0-9]*\.[0-9]*\).*$/\1/' | head -1)"
+    downloadURL="https://cdn.fellow.app/desktop/1.3.11/darwin/stable/universal/Fellow-1.3.11-universal.dmg"
+    appNewVersion=""
     expectedTeamID="2NF46HY8D8"
     ;;
 figma)
@@ -4410,16 +4360,6 @@ findanyfile)
     appNewVersion=$(curl -fs "https://findanyfile.app/appcast2.php" | xpath '(//rss/channel/item/enclosure/@sparkle:shortVersionString)[1]' 2>/dev/null | cut -d '"' -f2)
     expectedTeamID="25856V4B4X"
     ;;
-firefox)
-    name="Firefox"
-    type="dmg"
-    downloadURL="https://download.mozilla.org/?product=firefox-latest&os=osx&lang=en-US"
-    firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
-    appNewVersion=$(getJSONValue "$firefoxVersions" "LATEST_FIREFOX_VERSION")
-    expectedTeamID="43AQ936H96"
-    blockingProcesses=( firefox )
-    printlog "WARNING for ERROR: Label firefox and firefox_intl should not be used. Instead use firefoxpkg and firefoxpkg_intl as per recommendations from Firefox. It's not fully certain that the app actually gets updated here. firefoxpkg and firefoxpkg_intl will have built in updates and make sure the client is updated in the future." REQ
-    ;;
 firefox_da)
     name="Firefox"
     type="dmg"
@@ -4457,22 +4397,22 @@ firefox_intl)
     blockingProcesses=( firefox )
     printlog "WARNING for ERROR: Label firefox and firefox_intl should not be used. Instead use firefoxpkg and firefoxpkg_intl as per recommendations from Firefox. It's not fully certain that the app actually gets updated here. firefoxpkg and firefoxpkg_intl will have built in updates and make sure the client is updated in the future." REQ
     ;;
+firefox)
+    name="Firefox"
+    type="dmg"
+    downloadURL="https://download.mozilla.org/?product=firefox-latest&os=osx&lang=en-US"
+    firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
+    appNewVersion=$(getJSONValue "$firefoxVersions" "LATEST_FIREFOX_VERSION")
+    expectedTeamID="43AQ936H96"
+    blockingProcesses=( firefox )
+    printlog "WARNING for ERROR: Label firefox and firefox_intl should not be used. Instead use firefoxpkg and firefoxpkg_intl as per recommendations from Firefox. It's not fully certain that the app actually gets updated here. firefoxpkg and firefoxpkg_intl will have built in updates and make sure the client is updated in the future." REQ
+    ;;
 firefoxdeveloperedition)
     name="Firefox Developer Edition"
     type="dmg"
     downloadURL="https://download.mozilla.org/?product=firefox-devedition-latest-ssl&os=osx&lang=en-US"
     appNewVersion=$(curl -fsIL "https://download.mozilla.org/?product=firefox-devedition-latest-ssl&os=osx&lang=en-US&_gl=1*1g4sufp*_ga*OTAwNTc3MjE4LjE2NTM2MDIwODM.*_ga_MQ7767QQQW*MTY1NDcyNTYyNy40LjEuMTY1NDcyNzA2MS4w" | grep -i ^location | cut -d "/" -f7)
     expectedTeamID="43AQ936H96"
-    ;;
-firefoxesr|\
-firefoxesrpkg)
-    name="Firefox"
-    type="pkg"
-    downloadURL="https://download.mozilla.org/?product=firefox-esr-pkg-latest-ssl&os=osx"
-    firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
-    appNewVersion=$(getJSONValue "$firefoxVersions" "FIREFOX_ESR")
-    expectedTeamID="43AQ936H96"
-    blockingProcesses=( firefox )
     ;;
 firefoxesr_intl)
     # This label will try to figure out the selected language of the user,
@@ -4501,12 +4441,13 @@ firefoxesr_intl)
     blockingProcesses=( firefox )
     printlog "WARNING for ERROR: Label firefox and firefox_intl should not be used. Instead use firefoxpkg and firefoxpkg_intl as per recommendations from Firefox. It's not fully certain that the app actually gets updated here. firefoxpkg and firefoxpkg_intl will have built in updates and make sure the client is updated in the future." REQ
     ;;
-firefoxpkg)
+firefoxesr|\
+firefoxesrpkg)
     name="Firefox"
     type="pkg"
-    downloadURL="https://download.mozilla.org/?product=firefox-pkg-latest-ssl&os=osx&lang=en-US"
+    downloadURL="https://download.mozilla.org/?product=firefox-esr-pkg-latest-ssl&os=osx"
     firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
-    appNewVersion=$(getJSONValue "$firefoxVersions" "LATEST_FIREFOX_VERSION")
+    appNewVersion=$(getJSONValue "$firefoxVersions" "FIREFOX_ESR")
     expectedTeamID="43AQ936H96"
     blockingProcesses=( firefox )
     ;;
@@ -4533,6 +4474,15 @@ firefoxpkg_intl)
         printlog "Download not found for that language. Using en-US" WARN
         downloadURL="https://download.mozilla.org/?product=firefox-pkg-latest-ssl&os=osx&lang=en-US"
     fi
+    firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
+    appNewVersion=$(getJSONValue "$firefoxVersions" "LATEST_FIREFOX_VERSION")
+    expectedTeamID="43AQ936H96"
+    blockingProcesses=( firefox )
+    ;;
+firefoxpkg)
+    name="Firefox"
+    type="pkg"
+    downloadURL="https://download.mozilla.org/?product=firefox-pkg-latest-ssl&os=osx&lang=en-US"
     firefoxVersions=$(curl -fs "https://product-details.mozilla.org/1.0/firefox_versions.json")
     appNewVersion=$(getJSONValue "$firefoxVersions" "LATEST_FIREFOX_VERSION")
     expectedTeamID="43AQ936H96"
@@ -5123,6 +5073,22 @@ huddly)
     appNewVersion="$(curl -fsIL "${downloadURL}" | grep -i '^content-disposition' | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/g')"
     expectedTeamID="J659R47HZT"
     ;;
+hudlsportscode)
+    name="Hudl Sportscode"
+    type="appInDmgInZip"
+    appNewVersion=$(curl -fs https://www.hudl.com/downloads/elite | grep -A 1 "Download Hudl Sportscode" | grep -o -e "[0-9.]*")
+    downloadURL="https://sportscode64-updates.s3.amazonaws.com/PublicReleaseDmgs/HudlSportscode-$appNewVersion.dmg.zip"
+	versionKey="CFBundleVersion"
+    expectedTeamID="4M6T2C723P"
+    ;;
+hudlstudio)
+    name="Studio"
+    type="dmg"
+    appNewVersion=$(curl -fs https://www.hudl.com/downloads/elite | grep -A 1 "Download Studio" | grep -o -e "[0-9.]*")
+    downloadURL="https://studio-releases.s3.amazonaws.com/Studio-$appNewVersion.dmg"
+	versionKey="CFBundleVersion"
+    expectedTeamID="2YLQ7PASUE"
+    ;;
 hype)
     name="Hype4"
     type="dmg"
@@ -5341,9 +5307,9 @@ isadora)
 island)
     name="Island"
     type="dmg"
-    downloadURL="" # Customers MUST request a dedicated URL from the vendor to use this label. ie. https://your_tenant_id.internal.island.io/id_provided_by_vendor/stable/latest/mac/IslandX64.dmg
+    downloadURL="https://d3qqq7lqx3rf23.internal.island.io/E5QCaudFDx5FE5OX4INk/stable/latest/mac/IslandX64.dmg"
     appCustomVersion() { echo "$(defaults read /Applications/Island.app/Contents/Info.plist CFBundleShortVersionString | sed 's/[^.]*.//' | sed -e 's/*\.//')" }
-    appNewVersion=$(curl -fsLIXGET ${downloadURL} | grep -i "^x-amz-meta-version" | sed -e 's/x-amz-meta-version\: //' | tr -d '\r')
+    appNewVersion=$(curl -fsLIXGET "https://d3qqq7lqx3rf23.internal.island.io/E5QCaudFDx5FE5OX4INk/stable/latest/mac/IslandX64.dmg" | grep -i "^x-amz-meta-version" | sed -e 's/x-amz-meta-version\: //' | tr -d '\r')
     expectedTeamID="38ZC4T8AWY"
     ;;
 istatmenus)
@@ -5398,6 +5364,13 @@ jamfcheck)
     appNewVersion="$(versionFromGit txhaflaire JamfCheck)"
     expectedTeamID="CLQKFNPCCP"
     ;;
+jamfcomplianceeditor)
+    name="Jamf Compliance Editor"
+    type="pkg"
+	downloadURL="$(downloadURLFromGit Jamf-Concepts jamf-compliance-editor)"
+    appNewVersion="$(versionFromGit Jamf-Concepts jamf-compliance-editor)"
+    expectedTeamID="483DWKW443"
+    ;;
 jamfconnect)
     name="Jamf Connect"
     type="pkgInDmg"
@@ -5428,11 +5401,11 @@ jamfcpr)
     appNewVersion="$(versionFromGit BIG-RAT jamfcpr)"
     expectedTeamID="PS2F6S478M"
     ;;
-jamfmigrator)
-    name="jamf-migrator"
+jamfmigrator|replicator)
+    name="replicator"
     type="zip"
-    downloadURL=$(downloadURLFromGit jamf JamfMigrator)
-    appNewVersion=$(versionFromGit jamf JamfMigrator)
+    downloadURL=$(downloadURLFromGit jamf Replicator)
+    appNewVersion=$(versionFromGit jamf Replicator)
     expectedTeamID="PS2F6S478M"
     ;;
 jamfpppcutility)
@@ -8311,7 +8284,13 @@ qlab)
     appNewVersion=$(curl -fs "https://qlab.app/appcast/v5/" | xpath 'string(//rss/channel[1]/item/enclosure/@sparkle:shortVersionString)')
     expectedTeamID="7672N4CCJM"
     ;;
-r)
+quba)
+    name="Quba"
+    type="dmg"
+    downloadURL=$(curl -s https://quba-viewer.org | grep -o 'href="[^"]*\.dmg"' | head -n 1 | cut -d'"' -f2)
+    appNewVersion=$(echo $downloadURL | sed -n 's/.*Quba-\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+    expectedTeamID="W92KCRC9LM"
+    ;;r)
     name="R"
     type="pkg"
     if [[ $(arch) == "arm64" ]]; then
@@ -8811,6 +8790,15 @@ sdnotary)
     appNewVersion=$(echo "$downloadURL" | sed -E 's/.*\/[a-zA-Z]*([0-9.]*)-.*\.zip/\1/g')
     expectedTeamID="Z7S6X96M3X"
     ;;
+seafileclient)
+    # nur A&O-Intern, lädt den Seafile DMG, was erst per JAMF Admin auf JSS/Athene geladen wurde
+    # appNewVersion wird erstmal manuell vorgegeben
+    name="Seafile Client"
+    type="pkg"
+    downloadURL="https://web.arts-others.de/CasperShare/Packages/Seafile.pkg"
+    appNewVersion="9.0.12"
+    expectedTeamID="55LCTZ5354"
+    ;;
 secretive)
     name="Secretive"
     type="zip"
@@ -8863,20 +8851,6 @@ shottr)
     downloadURL="https://shottr.cc$(curl -fs "https://shottr.cc/newversion.html" | grep -o '\/dl\/Shottr-[0-9].[0-9].[0-9]\.dmg' | head -1 | xargs)"
     appNewVersion=$(echo $downloadURL | grep -o '[0-9].[0-9].[0-9]' | xargs)
     expectedTeamID="2Y683PRQWN"
-    ;;
-shutterencoder)
-    name="Shutter Encoder"
-    type="pkg"
-    curlOptions=( -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15" )
-    webSource=$(curl -L $curlOptions --request GET --url "https://www.shutterencoder.com/changelog.html&render_js=1")
-    if [[ $(arch) == "arm64" ]]; then
-        appNewVersion=$(grep "href=\"Shutter Encoder .* Apple Silicon" <<< $webSource | awk '{print$4}')
-        downloadURL=$(grep "APPLE SILICON VERSION" <<< $webSource | grep -oe "https://.*\" class" | sed -e 's/" class//')
-    elif [[ $(arch) == "i386" ]]; then
-        appNewVersion=$(grep "href=\"Shutter Encoder .* Mac 64bits" <<< $webSource | awk '{print$4}')
-        downloadURL=$(grep ">INTEL 64-BITS VERSION" <<< $webSource | grep -oe "https://.*\" class" | sed -e 's/" class//')
-    fi
-    expectedTeamID="LZ28YRG3Q4"
     ;;
 sidekick)
     name="Sidekick"
@@ -9480,6 +9454,45 @@ sync)
     expectedTeamID="7QR39CMJ3W"
     blockingProcesses=( "Sync" "sync-worker.exe" )
     ;;
+synergybaseball)
+    name="Synergy Baseball"
+    type="dmg"
+    downloadURL="$( echo https://www.synergysportstech.com/baseballclient/MacOS/$(curl -s https://www.synergysportstech.com/baseballclient/MacOS/default.htm | grep dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}') )"
+    appNewVersion=$(curl -fs https://www.synergysportstech.com/baseballclient/MacOS/default.htm | grep Version: | grep -o -e "[0-9.]*")
+	versionKey="CFBundleVersion"
+    expectedTeamID="BATB6XS52B"
+    ;;
+
+synergybasketball)
+    name="Synergy Basketball"
+    type="dmg"
+    downloadURL="$( echo https://www.synergysportstech.com/Apps/Basketball/production/macOS/$(curl -s https://www.synergysportstech.com/Apps/Basketball/production/macOS/default.htm | grep dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}') )"
+    appNewVersion=$(curl -fs https://www.synergysportstech.com/Apps/Basketball/production/macOS/default.htm | grep Version: | grep -o -e "[0-9.]*")
+	versionKey="CFBundleVersion"
+    expectedTeamID="BATB6XS52B"
+    ;;
+synergyeditor|synergyeditorbasketball)
+    name="Synergy Editor"
+    type="dmg"
+    if [[ "$(arch)" == "arm64" ]]; then
+        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep arm64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
+    else
+        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep x64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
+    fi
+    appNewVersion=$(curl -fs https://www.synergysportstech.com/apps/editor/basketball/macos/default.html | grep Version: | grep -o -e "[0-9.]*")
+    versionKey="CFBundleShortVersionString"
+    expectedTeamID="BATB6XS52B"
+    ;;
+synergyvideoexpress)
+    name="Synergy Video Express"
+    type="dmg"
+    relativeDownloadURL="$(curl -fsL https://www.synergysportstech.com/apps/videoexpress/production/macOS/default.htm | grep -Eo 'Synergy_Video_Express_[^"]+\.dmg' | head -1)"
+    downloadURL="https://www.synergysportstech.com/apps/videoexpress/production/macOS/${relativeDownloadURL}"
+    appNewVersion=$(echo "$relativeDownloadURL" | sed -E 's/.*_([0-9]+_[0-9]+_[0-9]+_[0-9]+)\.dmg/\1/' | tr '_' '.')
+    expectedTeamID="BATB6XS52B"
+    appName="Synergy Video Express.app"
+    blockingProcesses=( "Synergy Video Express" )
+    ;;
 synologyactivebackupforbusinessagent)
     name="Synology Active Backup for Business Agent"
     type="pkgInDmg"
@@ -9746,13 +9759,6 @@ thonny)
     appNewVersion="$(versionFromGit thonny thonny)"
     expectedTeamID="2SA9D4CVU8"
     ;;
-thunderbird)
-    name="Thunderbird"
-    type="dmg"
-	appNewVersion=$(curl -I -s "https://download.mozilla.org/?product=thunderbird-esr-latest&os=osx&lang=en-US" | grep -i location | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 )
-    downloadURL="https://download.mozilla.org/?product=thunderbird-esr-latest&os=osx&lang=en-US"
-    expectedTeamID="43AQ936H96"
-    ;;
 thunderbird_intl)
     # This label will try to figure out the selected language of the user,
     # and install corrosponding version of Thunderbird
@@ -9777,6 +9783,13 @@ thunderbird_intl)
     appNewVersion=$(curl -fsIL $downloadURL | awk -F releases/ '/Location:/ {split($2,a,"/"); print a[1]}')
     expectedTeamID="43AQ936H96"
     blockingProcesses=( thunderbird )
+    ;;
+thunderbird)
+    name="Thunderbird"
+    type="dmg"
+	appNewVersion=$(curl -I -s "https://download.mozilla.org/?product=thunderbird-esr-latest&os=osx&lang=en-US" | grep -i location | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 )
+    downloadURL="https://download.mozilla.org/?product=thunderbird-esr-latest&os=osx&lang=en-US"
+    expectedTeamID="43AQ936H96"
     ;;
 thunderbirdesr)
     name="Thunderbird"
@@ -10226,11 +10239,11 @@ virtualbuddy)
     expectedTeamID="8C7439RJLG"
     ;;
 viscosity)
-    #credit: @matins
     name="Viscosity"
     type="dmg"
     downloadURL="https://www.sparklabs.com/downloads/Viscosity.dmg"
     appNewVersion=$( curl -fsIL "${downloadURL}" | grep -i "^location" | awk '{print $2}' | sed -E 's/.*\/[a-zA-Z.\-]*%20([0-9.]*)\..*/\1/g' )
+    blockingProcesses=( "Viscosity" "com.sparklabs.ViscosityHelper" )
     expectedTeamID="34XR7GXFPX"
     ;;
 visualz)
@@ -10946,11 +10959,7 @@ case $LOGO in
         ;;
     microsoft)
         # Microsoft Endpoint Manager (Intune)
-        if [[ -d "/Library/Intune/Microsoft Intune Agent.app" ]]; then
-            LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
-        elif [[ -d "/Applications/Company Portal.app" ]]; then
-            LOGO="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
-        fi
+        LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
         if [[ -z $MDMProfileName ]]; then; MDMProfileName="Management Profile"; fi
         ;;
     ws1)
@@ -10967,6 +10976,10 @@ case $LOGO in
         # FileWave
         LOGO="/usr/local/sbin/FileWave.app/Contents/Resources/fwGUI.app/Contents/Resources/kiosk.icns"
         if [[ -z $MDMProfileName ]]; then; MDMProfileName="FileWave MDM Configuration"; fi
+        ;;
+    aaoc)
+        # Arts & Others Communication GmbH
+        LOGO="/Library/Application Support/AAOC/AOAppIcon.icns"
         ;;
 esac
 if [[ ! -a "${LOGO}" ]]; then

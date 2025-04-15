@@ -62,36 +62,17 @@ displaydialogContinue() { # $1: message $2: title
 displaynotification() { # $1: message $2: title
     message=${1:-"Message"}
     title=${2:-"Notification"}
+    manageaction="/Library/Application Support/JAMF/bin/Management Action.app/Contents/MacOS/Management Action"
+    hubcli="/usr/local/bin/hubcli"
+    swiftdialog="/usr/local/bin/dialog"
 
-    # For notifications, built in MDM tools have priority over 3. party tools, and AppleScript is the fallback option.
-    # Unless the 3. party tool is specified in variable NOTIFIER_APP
-
-    if [[ "$NOTIFIER_APP" = "dialog" && "$($DIALOG_CMD --version | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "Swift Dialog notification override" INFO
-        printlog "${DIALOG_CMD}: $($DIALOG_CMD --version)" DEBUG
-        "$DIALOG_CMD" --notification --title "$title" --message "$message"
-    elif [[ "$NOTIFIER_APP" = "ibmnotifier" && "$($ibmnotifier --version | cut -d ":" -f2 | grep -oe "[0-9.]*" | head -1 | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "IBM Notifier notification override" INFO
-        printlog "${ibmnotifier}: $($ibmnotifier --version)" DEBUG
-        "$ibmnotifier" -type banner -title "$title" -subtitle "$message" -timeout
+    if [[ "$($swiftdialog --version | cut -d "." -f1)" -ge 2 && "$NOTIFY_DIALOG" -eq 1 ]]; then
+        "$swiftdialog" --notification --title "$title" --message "$message"
     elif [[ -x "$manageaction" ]]; then
-        printlog "Jamf notification" INFO
-        printlog "${manageaction}: $($DIALOG_CMD --version)" DEBUG
          "$manageaction" -message "$message" -title "$title" &
     elif [[ -x "$hubcli" ]]; then
-        printlog "AirWatch Workspace ONE notification" INFO
-        printlog "${hubcli}: $($DIALOG_CMD --version)" DEBUG
          "$hubcli" notify -t "$title" -i "$message" -c "Dismiss"
-    elif [[ "$($DIALOG_CMD --version | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "Swift Dialog notification" INFO
-        printlog "${DIALOG_CMD}: $($DIALOG_CMD --version)" DEBUG
-        "$DIALOG_CMD" --notification --title "$title" --message "$message"
-    elif [[ "$($ibmnotifier --version | cut -d ":" -f2 | grep -oe "[0-9.]*" | head -1 | cut -d "." -f1)" -ge 2 ]]; then
-        printlog "IBM Notifier notification" INFO
-        printlog "${ibmnotifier}: $($ibmnotifier --version)" DEBUG
-        "$ibmnotifier" -type banner -title "$title" -subtitle "$message" -timeout
     else
-        printlog "AppleScript notification fallback" INFO
         runAsUser osascript -e "display notification \"$message\" with title \"$title\""
     fi
 }
@@ -122,8 +103,7 @@ printlog(){
         echo "$timestamp" : "${log_priority}${space_char} : $label : Last Log repeated ${logrepeat} times" | tee -a $log_location
 
         if [[ ! -z $datadogAPI ]]; then
-          datadogLogEntry=$(eval "echo $DATADOG_REPEAT_LOGFORMAT")
-          curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${datadogLogEntry}" > /dev/null
+            curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${log_priority} : $mdmURL : $APPLICATION : $VERSION : $SESSION : Last Log repeated ${logrepeat} times" > /dev/null
         fi
         logrepeat=0
     fi
@@ -132,8 +112,7 @@ printlog(){
     # then post to Datadog's HTTPs endpoint.
     if [[ -n $datadogAPI && ${levels[$log_priority]} -ge ${levels[$datadogLoggingLevel]} ]]; then
         while IFS= read -r logmessage; do
-          datadogLogEntry=$(eval "echo $DATADOG_LOGFORMAT")
-          curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${datadogLogEntry}" > /dev/null
+            curl -s -X POST https://http-intake.logs.datadoghq.com/v1/input -H "Content-Type: text/plain" -H "DD-API-KEY: $datadogAPI" -d "${log_priority} : $mdmURL : Installomator-${label} : ${VERSIONDATE//-/} : $SESSION : ${logmessage}" > /dev/null
         done <<< "$log_message"
     fi
 
@@ -330,6 +309,70 @@ getAppVersion() {
     fi
 }
 
+QuitOrKillGently() {
+	# function that gets called with process name as $1
+	printlog "telling app \"$1\" to quit"
+	runAsUser osascript -e "tell app \"$1\" to quit"
+	sleep 5
+	if pgrep -xq "$1"; then
+		runAsUser osascript -e "tell app \"$1\" to quit"
+		sleep 5
+	fi
+
+	# walk through all processes that can be found using pgrep and first send them a
+	# SIGTERM and after 3 seconds a SIGKILL
+	RemainingPIDs=($(pgrep "$1"))
+	Iteration=0
+	while [ ${#RemainingPIDs[@]} -gt 0 -a ${Iteration} -lt 3 ] ; do
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGTERM to PID ${PID}: ${Process}"
+			kill ${PID}
+		done
+		sleep 5
+		RemainingPIDs=($(pgrep "$1"))
+		for PID in ${RemainingPIDs} ; do
+			Process="$(ps ${PID} | awk -F" /" "/${PID}/ {print \"/\"\$2}")"
+			printlog "sending SIGKILL to PID ${PID}: ${Process}"
+			kill -9 ${PID}
+		done
+		sleep 3
+		RemainingPIDs=($(pgrep "$1"))
+		((Iteration++))
+	done
+} # QuitOrKillGently
+
+DealWithLaunchDaemon() {
+	# function that stops/starts launchdaemons that could otherwise interfere with install
+	# $1 is name of plist, $2 is stop/start
+
+	[ -f "$1" ] && LaunchDaemonLabel="$(defaults read "$1" Label 2>/dev/null)"
+	if [ "${LaunchDaemonLabel}" = "X" ]; then
+		printlog "$1 not found or not readable. Skipping"
+	else
+		case $2 in
+			stop)
+				# unload LaunchDaemon when running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -eq 0 ]; then
+					launchctl unload -w "$1" && printlog "Unloaded ${LaunchDaemonLabel}" || printlog "Unloading ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} not running, nothing to do"
+				fi
+				;;
+			start)
+				# load LaunchDaemon again if not already running
+				launchctl list | grep -q "${LaunchDaemonLabel}$"
+				if [ $? -ne 0 ]; then
+					launchctl load -w "$1" && printlog "Restarted ${LaunchDaemonLabel}" || printlog "Restarting ${LaunchDaemonLabel} failed"
+				else
+					printlog "${LaunchDaemonLabel} already running, nothing to do"
+				fi
+				;;
+		esac
+	fi
+} # DealWithLaunchDaemon
+
 checkRunningProcesses() {
     # don't check in DEBUG mode 1
     if [[ $DEBUG -eq 1 ]]; then
@@ -337,32 +380,26 @@ checkRunningProcesses() {
         return
     fi
 
+	# unload LaunchDaemons that could interfere with installation
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" stop
+	done
+
+	# stop/remove user LaunchAgents that could interfere with installation
+	for x in ${LaunchAgentsToStop}; do
+		printlog "stopping $x LaunchAgent"
+		runAsUser launchctl stop "$x"
+		runAsUser launchctl remove "$x"
+	done
+
     # try at most 3 times
     for i in {1..4}; do
-        countedProcesses=0
         for x in ${blockingProcesses}; do
             if pgrep -xq "$x"; then
                 printlog "found blocking process $x"
                 appClosed=1
 
                 case $BLOCKING_PROCESS_ACTION in
-                    quit|quit_kill)
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        if [[ $i > 2 && $BLOCKING_PROCESS_ACTION = "quit_kill" ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                            # give the user a bit of time to quit apps
-                            printlog "waiting 30 seconds for processes to quit"
-                            sleep 30
-                        fi
-                        ;;
-                    kill)
-                      printlog "killing process $x"
-                      pkill $x
-                      sleep 5
-                      ;;
                     prompt_user|prompt_user_then_kill)
                       button=$(displaydialog "Quit “$x” to continue updating? $([[ -n $appNewVersion ]] && echo "Version $appversion is installed, but version $appNewVersion is available.") (Leave this dialogue if you want to activate this update later)." "The application “$x” needs to be updated.")
                       if [[ $button = "Not Now" ]]; then
@@ -372,22 +409,7 @@ checkRunningProcesses() {
                         appClosed=0
                         cleanupAndExit 25 "timed out waiting for user response" ERROR
                       else
-                        if [[ $BLOCKING_PROCESS_ACTION = "prompt_user_then_kill" ]]; then
-                          # try to quit, then set to kill
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                        else
-                          printlog "telling app $x to quit"
-                          runAsUser osascript -e "tell app \"$x\" to quit"
-                          # give the user a bit of time to quit apps
-                          printlog "waiting 30 seconds for processes to quit"
-                          sleep 30
-                        fi
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     prompt_user_loop)
@@ -401,47 +423,42 @@ checkRunningProcesses() {
                           BLOCKING_PROCESS_ACTION=tell_user
                         fi
                       else
-                        printlog "telling app $x to quit"
-                        runAsUser osascript -e "tell app \"$x\" to quit"
-                        # give the user a bit of time to quit apps
-                        printlog "waiting 30 seconds for processes to quit"
-                        sleep 30
+                        QuitOrKillGently "$x"
                       fi
                       ;;
                     tell_user|tell_user_then_kill)
                       button=$(displaydialogContinue "Quit “$x” to continue updating? (This is an important update). Wait for notification of update before launching app again." "The application “$x” needs to be updated.")
-                      printlog "telling app $x to quit"
-                      runAsUser osascript -e "tell app \"$x\" to quit"
-                      # give the user a bit of time to quit apps
-                      printlog "waiting 30 seconds for processes to quit"
-                      sleep 30
-                      if [[ $i > 1 && $BLOCKING_PROCESS_ACTION = tell_user_then_kill ]]; then
-                          printlog "Changing BLOCKING_PROCESS_ACTION to kill"
-                          BLOCKING_PROCESS_ACTION=kill
-                      fi
+                      printlog "Quit or kill gently $x"
+                      QuitOrKillGently "$x"
+                      ;;
+                    kill|quit|quit_kill)
+                       printlog "Quit or kill gently $x"
+                       QuitOrKillGently "$x"
                       ;;
                     silent_fail)
                       appClosed=0
                       cleanupAndExit 12 "blocking process '$x' found, aborting" ERROR
                       ;;
                 esac
-
-                countedProcesses=$((countedProcesses + 1))
             fi
         done
-
     done
 
-    if [[ $countedProcesses -ne 0 ]]; then
+    if pgrep -xq "$x"; then
         cleanupAndExit 11 "could not quit all processes, aborting..." ERROR
     fi
 
     printlog "no more blocking processes, continue with update" REQ
-}
+} #checkRunningProcesses
 
 reopenClosedProcess() {
     # If Installomator closed any processes, let's get the app opened again
     # credit: Søren Theilgaard (@theilgaard)
+
+	# restart LaunchDaemons that were stopped prior to install
+	for x in ${LaunchDaemonsToUnload}; do
+		DealWithLaunchDaemon "$x" start
+	done
 
     # don't reopen if REOPEN is not "yes"
     if [[ $REOPEN != yes ]]; then
@@ -466,7 +483,7 @@ reopenClosedProcess() {
     else
         printlog "Installomator did not close any apps, so no need to reopen any apps." INFO
     fi
-}
+} #reopenClosedProcess
 
 installAppWithPath() { # $1: path to app to install in $targetDir $2: path to folder (with app inside) to copy to $targetDir
     # modified by: Søren Theilgaard (@theilgaard)
@@ -587,7 +604,7 @@ installAppWithPath() { # $1: path to app to install in $targetDir $2: path to fo
         fi
 
         # set ownership to current user
-        if [[ "$currentUser" != "loginwindow" && "$currentUser" != "_mbsetupuser" && $SYSTEMOWNER -ne 1 ]]; then
+        if [[ "$currentUser" != "loginwindow" && $SYSTEMOWNER -ne 1 ]]; then
             printlog "Changing owner to $currentUser" WARN
             chown -R "$currentUser" "$targetDir/$appName"
         else
@@ -649,9 +666,9 @@ installFromPKG() {
     spctlStatus=$(echo $?)
     printlog "spctlOut is $spctlOut" DEBUG
 
-    teamID=$(echo $spctlOut | awk -F '(' '/origin=/ {print $NF }' | tr -d '()' )
-    # Apple signed software has no teamID, grab entire text after origin= instead
-    if [[ -z $teamID ]] || [[ $teamID == "origin="* ]]; then
+    teamID=$(echo $spctlOut | awk -F '(' '/origin=/ {print $2 }' | tr -d '()' )
+    # Apple signed software has no teamID, grab entire origin instead
+    if [[ -z $teamID ]]; then
         teamID=$(echo $spctlOut | awk -F '=' '/origin=/ {print $NF }')
     fi
 
