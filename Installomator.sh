@@ -349,7 +349,7 @@ if [[ $(/usr/bin/arch) == "arm64" ]]; then
     fi
 fi
 VERSION="10.8"
-VERSIONDATE="2025-10-22"
+VERSIONDATE="2025-11-14"
 
 # MARK: Functions
 
@@ -7710,6 +7710,14 @@ onyx)
     appNewVersion=$( curl -fs https://www.titanium-software.fr/en/onyx.html | grep -Eo "OnyX [0-9]+\.[0-9]+\.[0-9]+ for macOS [^ ]+ $osVersion" | awk '{print $2}' | sort -Vr | head -1 )
     versionKey="CFBundleShortVersionString"
     expectedTeamID="T49MRBL8UL"
+    ;;
+openclouddesktop)
+    name="OpenCloud"
+    type="pkg"
+    downloadURL=$(downloadURLFromGit opencloud-eu Desktop)
+    appNewVersion=$(versionFromGit opencloud-eu Desktop)
+    expectedTeamID="8P6LQ2M542"
+    blockingProcesses=( OpenCloud )
     ;;
 openeid)
     name="Open-EID"
