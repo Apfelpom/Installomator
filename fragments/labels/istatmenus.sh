@@ -1,9 +1,11 @@
 istatmenus)
-    # credit: AP Orlebeke (@apizz)
     name="iStat Menus"
     type="zip"
-    downloadURL="https://download.bjango.com/istatmenus/"
+    downloadURL="https://download.bjango.com/istatmenus7/"
     expectedTeamID="Y93TK974AT"
-    appNewVersion=$(curl -fs https://bjango.com/mac/istatmenus/versionhistory/ | grep "<h3>" | head -1 | sed -E 's/<h3>([0-9.]*)<\/h3>/\1/')
+    appNewVersion=$(curl -fsSL "https://bjango.com/mac/istatmenus/" \
+        | grep -oE 'iStat Menus [0-9]+\.[0-9.]+' \
+        | head -1 \
+        | sed -E 's/iStat Menus ([0-9.]+)/\1/')
     blockingProcesses=( "iStat Menus" "iStatMenusAgent" "iStat Menus Status" )
     ;;
