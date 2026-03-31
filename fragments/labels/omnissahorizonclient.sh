@@ -1,4 +1,3 @@
-vmwarehorizonclient|\
 omnissahorizonclient)
     name="Omnissa Horizon Client"
     type="pkgInDmg"
