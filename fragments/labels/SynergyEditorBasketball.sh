@@ -1,12 +1,13 @@
 synergyeditor|synergyeditorbasketball)
     name="Synergy Editor"
     type="dmg"
+    baseURL="https://www.synergysportstech.com/apps/editor/basketball/macos"
     if [[ "$(arch)" == "arm64" ]]; then
-        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep arm64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
+        dmgPath=$(curl -s "$baseURL/" | grep -o 'href="[^"]*arm64\.dmg[^"]*"' | head -1 | sed 's/href="//;s/"//')
     else
-        downloadURL=$( echo https://www.synergysportstech.com/apps/editor/basketball/macos/$(curl -s https://www.synergysportstech.com/apps/editor/basketball/macos/ | grep x64.dmg | grep -o 'href="[^"]*' | head -1 | awk -F '="' '{print $NF}' ))
+        dmgPath=$(curl -s "$baseURL/" | grep -o 'href="[^"]*x64\.dmg[^"]*"' | head -1 | sed 's/href="//;s/"//')
     fi
+    downloadURL="${baseURL}/${dmgPath}"
     appNewVersion=$(curl -fs https://www.synergysportstech.com/apps/editor/basketball/macos/default.html | grep Version: | grep -o -e "[0-9.]*")
-    versionKey="CFBundleShortVersionString"
     expectedTeamID="BATB6XS52B"
     ;;

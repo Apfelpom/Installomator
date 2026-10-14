@@ -106,7 +106,11 @@ case $LOGO in
         ;;
     microsoft)
         # Microsoft Endpoint Manager (Intune)
-        LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
+        if [[ -d "/Library/Intune/Microsoft Intune Agent.app" ]]; then
+            LOGO="/Library/Intune/Microsoft Intune Agent.app/Contents/Resources/AppIcon.icns"
+        elif [[ -d "/Applications/Company Portal.app" ]]; then
+            LOGO="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
+        fi
         if [[ -z $MDMProfileName ]]; then; MDMProfileName="Management Profile"; fi
         ;;
     ws1)
@@ -370,8 +374,8 @@ case $type in
     pkgInZip)
         installPkgInZip
         ;;
-    appInDmgInZip)
-        installAppInDmgInZip
+    *InDmgInZip)
+        installItemInDmgInZip
         ;;
     *)
         cleanupAndExit 99 "Cannot handle type $type" ERROR

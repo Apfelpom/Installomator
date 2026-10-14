@@ -15,7 +15,7 @@ overlayicon=""
 
 # dockutil variables
 addToDock="0" # with dockutil after installation (0 if not)
-appPath="/Applications/Cyberduck.app"
+dockutilAppPath="/Applications/Cyberduck.app"
 
 # Other variables
 dialog_command_file="/var/tmp/dialog.log"
@@ -114,7 +114,7 @@ caffexit () {
 }
 
 # Mark: Installation begins
-installomatorVersion="$(${destFile} version | cut -d "." -f1 || true)"
+installomatorVersion="$(${destFile} version | grep -Eo '[0-9]+\.[0-9]+' | head -1 | cut -d '.' -f1)"
 
 if [[ $installomatorVersion -lt 10 ]] || [[ $(sw_vers -buildVersion | cut -c1-2) -lt 20 ]]; then
     echo "Skipping swiftDialog UI, using notifications."
@@ -259,14 +259,14 @@ checkCmdOutput "${cmdOutput}"
 # Mark: dockutil stuff
 if [[ $addToDock -eq 1 ]]; then
     dialogUpdate "progresstext: Adding to Dock"
-    if [[ ! -d $dockutil ]]; then
+    if [[ ! -x $dockutil ]]; then
         echo "Cannot find dockutil at $dockutil, trying installation"
         # Install using Installlomator
         cmdOutput="$(${destFile} dockutil LOGO=$LOGO BLOCKING_PROCESS_ACTION=ignore LOGGING=REQ NOTIFY=silent || true)"
         checkCmdOutput "${cmdOutput}"
     fi
     echo "Adding to Dock"
-    $dockutil  --add "${appPath}" "${userHome}/Library/Preferences/com.apple.dock.plist" || true
+    $dockutil  --add "${dockutilAppPath}" "${userHome}/Library/Preferences/com.apple.dock.plist" || true
     sleep 1
 else
     echo "Not adding to Dock."
